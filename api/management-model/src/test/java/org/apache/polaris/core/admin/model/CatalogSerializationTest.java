@@ -19,14 +19,12 @@
 package org.apache.polaris.core.admin.model;
 
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.junit.jupiter.params.provider.Arguments.arguments;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 public class CatalogSerializationTest {
@@ -39,19 +37,12 @@ public class CatalogSerializationTest {
   @BeforeEach
   public void setUp() {
     mapper = new ObjectMapper();
+    // Mapper to use the concrete Catalog class
+    mapper.addMixIn(PolarisCatalog.class, Catalog.class);
   }
 
-  /**
-   * Helper method to verify round-trip serialization/deserialization of Catalog objects. Ensures
-   * all fields are preserved correctly through the process.
-   *
-   * @param original The catalog object to test
-   * @return The deserialized catalog for additional assertions if needed
-   */
   private Catalog verifyRoundTrip(Catalog original) throws JsonProcessingException {
     String json = mapper.writeValueAsString(original);
-
-    // Verify type field appears exactly once
     int typeFieldCount = json.split("\"type\"").length - 1;
     assertThat(typeFieldCount)
         .as("type field should appear exactly once for %s catalog", original.getType())
@@ -59,54 +50,61 @@ public class CatalogSerializationTest {
 
     Catalog deserialized = mapper.readValue(json, Catalog.class);
 
-    // Compare all fields recursively, ignoring actual types
-    assertThat(deserialized).usingRecursiveComparison().isEqualTo(original);
+    // Compare entire object recursively in one assertion
+    assertThat(deserialized).isEqualToComparingFieldByFieldRecursively(original);
 
     return deserialized;
   }
 
   @ParameterizedTest
   @MethodSource("catalogTestCases")
-  public void testCatalogSerialization(Catalog catalog) throws JsonProcessingException {
-    verifyRoundTrip(catalog);
+  public void testCatalogSerialization(TestCase testCase) throws JsonProcessingException {
+    verifyRoundTrip(testCase.getCatalog());
   }
 
-  private static Stream<Arguments> typeTestCases() {
-    return Stream.of(arguments(Catalog.TypeEnum.INTERNAL), arguments(Catalog.TypeEnum.EXTERNAL));
-  }
-
-  private static Stream<Arguments> catalogTestCases() {
-    Stream<Arguments> basicCases =
-        Stream.of(
-            arguments(
+  private static Stream<TestCase> catalogTestCases() {
+    return Stream.of(
+        new TestCase("Basic catalog")
+            .withCatalog(
                 new Catalog(
                     Catalog.TypeEnum.INTERNAL,
                     TEST_CATALOG_NAME,
                     new CatalogProperties(TEST_LOCATION),
                     new AwsStorageConfigInfo(TEST_ROLE_ARN, StorageConfigInfo.StorageTypeEnum.S3))),
-            arguments(new Catalog(Catalog.TypeEnum.INTERNAL, null, null, null)),
-            arguments(
+        new TestCase("Null fields")
+            .withCatalog(new Catalog(Catalog.TypeEnum.INTERNAL, null, null, null)),
+        new TestCase("Long name")
+            .withCatalog(
                 new Catalog(
                     Catalog.TypeEnum.INTERNAL,
                     "a".repeat(1000),
                     new CatalogProperties(TEST_LOCATION),
+                    null)),
+        new TestCase("Unicode characters")
+            .withCatalog(
+                new Catalog(
+                    Catalog.TypeEnum.INTERNAL, "测试目录", new CatalogProperties(TEST_LOCATION), null)),
+        new TestCase("Empty strings")
+            .withCatalog(
+                new Catalog(
+                    Catalog.TypeEnum.INTERNAL,
+                    "",
+                    new CatalogProperties(""),
+                    new AwsStorageConfigInfo("", StorageConfigInfo.StorageTypeEnum.S3))),
+        new TestCase("Special characters")
+            .withCatalog(
+                new Catalog(
+                    Catalog.TypeEnum.INTERNAL,
+                    "test\"catalog",
+                    new CatalogProperties(TEST_LOCATION),
+                    new AwsStorageConfigInfo(TEST_ROLE_ARN, StorageConfigInfo.StorageTypeEnum.S3))),
+        new TestCase("Whitespace")
+            .withCatalog(
+                new Catalog(
+                    Catalog.TypeEnum.INTERNAL,
+                    "  test  catalog  ",
+                    new CatalogProperties("  " + TEST_LOCATION + "  "),
                     null)));
-
-    Stream<Arguments> arnCases =
-        Stream.of(
-                "arn:aws:iam::123456789012:role/test-role",
-                "arn:aws:iam::123456789012:role/service-role/test-role",
-                "arn:aws:iam::123456789012:role/path/to/role")
-            .map(
-                arn ->
-                    arguments(
-                        new Catalog(
-                            Catalog.TypeEnum.INTERNAL,
-                            TEST_CATALOG_NAME,
-                            new CatalogProperties(TEST_LOCATION),
-                            new AwsStorageConfigInfo(arn, StorageConfigInfo.StorageTypeEnum.S3))));
-
-    return Stream.concat(basicCases, arnCases);
   }
 
   private static class TestCase {
@@ -120,6 +118,10 @@ public class CatalogSerializationTest {
     TestCase withCatalog(Catalog catalog) {
       this.catalog = catalog;
       return this;
+    }
+
+    Catalog getCatalog() {
+      return catalog;
     }
 
     @Override
